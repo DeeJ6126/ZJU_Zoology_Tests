@@ -1,14 +1,14 @@
 :root {
-  --bg: #fef9ef;
+  --bg: #f1f5f9;
   --surface: rgba(255, 251, 244, 0.86);
   --surface-strong: #fffdf8;
   --line: rgba(45, 45, 45, 0.12);
   --line-strong: rgba(45, 45, 45, 0.24);
   --ink: #2d2d2d;
   --ink-soft: #6b6b6b;
-  --primary: #d4a017;
-  --primary-deep: #8b6914;
-  --primary-soft: #fef3c7;
+  --primary: #6366f1;
+  --primary-deep: #4f46e5;
+  --primary-soft: #e0e7ff;
   --correct: #1f7a56;
   --correct-soft: #dcefe6;
   --incorrect: #b65642;
@@ -22,9 +22,9 @@
   --font-mono: 'Cascadia Code', 'SFMono-Regular', Consolas, monospace;
   color: var(--ink);
   background:
-    radial-gradient(circle at top left, rgba(212, 160, 23, 0.16), transparent 28%),
-    radial-gradient(circle at 85% 15%, rgba(139, 105, 20, 0.14), transparent 26%),
-    linear-gradient(180deg, #fef9ef 0%, #fef3c7 55%, #fde68a 100%);
+    radial-gradient(circle at top left, rgba(99, 102, 241, 0.10), transparent 28%),
+    radial-gradient(circle at 85% 15%, rgba(79, 70, 229, 0.08), transparent 26%),
+    linear-gradient(180deg, #f1f5f9 0%, #e2e8f0 100%);
   font: 16px/1.6 var(--font-body);
   font-synthesis: none;
   text-rendering: optimizeLegibility;

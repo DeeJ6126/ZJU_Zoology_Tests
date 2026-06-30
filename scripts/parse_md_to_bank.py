@@ -1,519 +1,178 @@
 #!/usr/bin/env python3
-"""
-Parse zoology question bank markdown files into structured JSON.
+"""Parse zoology md -> question-bank.json (v3 with distractors)."""
 
-Input files (in E:/Zoology/docx/):
-  1. 名词解释.md  — noun/term explanation questions (type: translation)
-  2. 选择判断.md   — choice and true-false questions (type: choice / true-false)
-  3. 简答论述.md   — essay questions (type: essay)
-
-Output: E:/Zoology/ZJU_Zoology_Tests/public/question-bank.json
-"""
-
-import re
-import json
+import re, json
 from datetime import datetime, timezone
 from pathlib import Path
 
-# ─── Paths ───────────────────────────────────────────────────────────────────
-DOCX_DIR = Path("E:/Zoology/docx")
-OUTPUT_FILE = Path("E:/Zoology/ZJU_Zoology_Tests/public/question-bank.json")
+SRC = Path("E:/Zoology/docx")
+OUT = Path("E:/Zoology/ZJU_Zoology_Tests/public/question-bank.json")
 
-# ─── Category definitions ────────────────────────────────────────────────────
-CATEGORIES = [
-    {"id": 0, "name": "脊索动物门（含圆口纲）"},
-    {"id": 1, "name": "鱼纲"},
-    {"id": 2, "name": "两栖纲"},
-    {"id": 3, "name": "爬行纲"},
-    {"id": 4, "name": "鸟纲"},
-    {"id": 5, "name": "哺乳纲"},
-    {"id": 6, "name": "比较解剖 / 综合"},
-]
+def clean(s):
+    s = re.sub(r'\*\*', '', s)
+    s = re.sub(r'\s+', ' ', s).strip()
+    return s
 
-# For matching: (keyword_regex, category_id, canonical_name)
-CATEGORY_PATTERNS = [
-    (r'脊索动物', 0, '脊索动物门（含圆口纲）'),
-    (r'圆口纲', 0, '脊索动物门（含圆口纲）'),
-    (r'鱼纲', 1, '鱼纲'),
-    (r'两栖纲', 2, '两栖纲'),
-    (r'爬行纲', 3, '爬行纲'),
-    (r'鸟纲', 4, '鸟纲'),
-    (r'哺乳纲', 5, '哺乳纲'),
-    (r'比较解剖', 6, '比较解剖 / 综合'),
-    (r'^综合$', 6, '比较解剖 / 综合'),
-]
-
-# Explicit category text patterns (after stripping bold markers and leading dash)
-KNOWN_CATEGORY_TEXTS = {
-    '脊索动物门', '脊索动物门（含圆口纲）',
-    '鱼纲', '两栖纲', '爬行纲', '鸟纲', '哺乳纲',
-    '比较解剖 / 综合',
+OPTS = {
+    '原索动物由哪些类群': ['尾索动物和头索动物', '头索动物和脊椎动物', '脊椎动物和尾索动物', '仅尾索动物'],
+    '属于尾索动物': ['海鞘', '文昌鱼', '七鳃鳗', '盲鳗'],
+    '雌雄同体': ['海鞘和盲鳗', '海鞘和文昌鱼', '文昌鱼和七鳃鳗', '七鳃鳗和盲鳗'],
+    '分界是': ['脊椎骨的出现', '脊索的出现', '咽鳃裂的出现', '背神经管的出现'],
+    '寰椎枢椎': ['爬行类及以上', '两栖类及以上', '鱼类及以上', '鸟类及以上'],
+    '椎体类型': ['双凹型', '前凹型', '后凹型', '双平型'],
+    '心脏中流动': ['全是缺氧血', '全是富氧血', '混合血', '无血液'],
+    '鱼分为': ['头/躯干/尾', '头/颈/躯干/尾', '头/躯干/尾/四肢', '头/胸/腹/尾'],
+    '红腺': ['气体分泌', '气体吸收', '气体传导', '气体过滤'],
+    '卵圆窗': ['气体吸收', '气体分泌', '听觉传导', '嗅觉感受'],
+    '皮肤衍生物包括': ['鳞片和粘液腺', '鳞片和毒腺', '羽毛和毛', '骨板和角质鳞'],
+    '角质鳞与盾鳞': ['表皮vs真皮', '均为表皮', '均为真皮', '同源结构'],
+    '哪对动脉弓': ['第4对', '第3对', '第5对', '第6对'],
+    '皮肤腺类型': ['粘液腺和毒腺', '皮脂腺和汗腺', '仅粘液腺', '仅毒腺'],
+    '颊窝': ['红外线感受器', '嗅觉器官', '听觉器官', '味觉器官'],
+    '次生腭': ['分口腔成上下两层', '辅助咀嚼', '辅助发声', '辅助嗅觉'],
+    '新脑皮': ['爬行类开始', '两栖类已出现', '鱼类已出现', '鸟类才开始'],
+    '没有膀胱': ['鸟类', '两栖类', '爬行类', '哺乳类'],
+    '排泄物类型': ['氨/尿素/尿酸', '尿素/氨/尿酸', '尿酸/氨/尿素', '尿素/尿酸/氨'],
+    '有龙骨突': ['帝企鹅', '非洲鸵鸟', '鸸鹋', '长尾雉'],
+    '羽区和裸区': ['平胸总目和企鹅总目', '突胸总目', '所有鸟类', '仅游禽'],
+    '没有羽小钩': ['绒羽和纤羽', '正羽和绒羽', '仅正羽', '所有羽毛都有'],
+    '雀形目': ['鹎', '夜鹭', '白鹭', '小鸊鷉'],
+    '愈合荐骨': ['胸椎+腰椎+荐椎+尾椎', '仅腰椎+荐椎', '仅荐椎', '全部尾椎'],
+    '中肾管的功能': ['仅输精(羊膜类)', '输尿兼输精', '仅输尿', '已退化'],
+    '尾脂腺': ['错误', '正确', '仅游禽有', '仅涉禽有'],
+    '后兽亚纲': ['大袋鼠', '鸭嘴兽', '针鼹', '蝙蝠'],
+    '胚胎时期肾脏': ['前肾/中肾/后肾', '中肾/前肾/后肾', '后肾/中肾/前肾', '仅后肾'],
+    '哺乳动物鸟类起源': ['均起源于爬行类', '哺乳起源于两栖类', '鸟类起源于哺乳类', '均起源于鱼类'],
+    '脊椎属于哪种': ['双平型', '双凹型', '前凹型', '后凹型'],
+    '牙齿胚层': ['外胚层和中胚层', '仅外胚层', '仅中胚层', '内胚层和中胚层'],
+    '鹿角': ['鹿角(实角)', '角质鳞', '羽毛', '爪'],
+    '皮肤衍生物的比较': ['角质鳞(表皮)/盾鳞(真皮)/羽毛(表皮)/毛发(表皮)', '均为表皮衍生物', '均为真皮衍生物', '角质鳞(真皮)/盾鳞(表皮)等'],
+    '鱼类心脏内': ['正确', '错误', '仅心室中', '仅心房中'],
+    '闭管循环': ['正确', '错误', '部分动物是', '无法判断'],
+    '有鳃': ['错误(蝌蚪也有)', '正确', '仅成体有', '仅幼体有'],
+    '鱼类用口进水': ['正确', '错误', '仅自由生活时', '仅寄生生活时'],
+    '原兽亚纲与真兽亚纲': ['卵生vs胎生', '有袋vs无袋', '变温vs恒温', '有齿vs无齿'],
+    '发电器官来源': ['电鳗(肌肉)', '电鲇(皮肤)', '电鳐(神经)', '电鲶(骨骼)'],
 }
 
-
-# ─── Helper functions ────────────────────────────────────────────────────────
-
-def read_lines(path: Path) -> list[str]:
-    """Read a UTF-8 file and return its lines."""
-    with open(path, 'r', encoding='utf-8') as f:
-        return f.readlines()
-
-
-def clean_bold(text: str) -> str:
-    """Remove **bold** markers from text."""
-    return re.sub(r'\*\*', '', text)
-
-
-def detect_category(text: str):
-    """Try to detect a category from a text line.
-
-    Returns (category_id, canonical_name) or (None, None).
-    """
-    clean = re.sub(r'\*\*', '', text)
-    clean = re.sub(r'^-\s*', '', clean).strip()
-    for kw, cid, cname in CATEGORY_PATTERNS:
-        if re.search(kw, clean):
-            return cid, cname
-    return None, None
-
-
-def get_indent_level(line: str) -> int:
-    """Return the number of leading spaces before the dash in a list item.
-
-    Only valid for lines matching ``^ *- ``. Returns -1 otherwise.
-    """
-    m = re.match(r'^( *)- ', line)
-    return len(m.group(1)) if m else -1
-
-
-def strip_trailing_count(text: str) -> str:
-    """Remove trailing （N次） markers."""
-    return re.sub(r'\s*[（(]\d+次[）)]\s*$', '', text).strip()
-
-
-def clean_prompt(text: str) -> str:
-    """Fully clean a prompt: bold, count markers, judgment markers."""
-    text = clean_bold(text)
-    text = re.sub(r'\s*[（(]\d+次[）)]\s*', '', text)
-    text = re.sub(r'\s*[（(]判断/选择[）)]\s*', '', text)
-    text = re.sub(r'\s*[（(]判断[）)]\s*', '', text)
-    return text.strip()
-
-
-# ─── File-specific parsers ───────────────────────────────────────────────────
-
-def parse_noun_file(lines: list[str]) -> list[dict]:
-    """Parse 名词解释.md → list of translation-type question dicts."""
-    questions = []
-    cat_id, cat_name = None, None
-    current = None
-    counter = 0
-
-    for line in lines:
-        stripped = line.rstrip()
-        if not stripped.strip():
-            continue
-
-        indent = get_indent_level(stripped)
-
-        if indent == 0:
-            # ── Category line ──
-            cid, cname = detect_category(stripped)
-            if cid is not None:
-                # Finalize previous question
-                if current and current.get('prompt'):
-                    counter += 1
-                    current['id'] = f"translation-{counter:03d}"
-                    if current.get('answer'):
-                        questions.append(current)
-                cat_id, cat_name = cid, cname
-                current = None
-
-        elif indent == 2:
-            # ── Question line (term) ──
-            if current and current.get('prompt'):
-                counter += 1
-                current['id'] = f"translation-{counter:03d}"
-                if current.get('answer'):
-                    questions.append(current)
-
-            q_text = line.lstrip(' -').strip()
-            # Extract the first **term** as the prompt
-            term_match = re.search(r'\*\*(.+?)\*\*', q_text)
-            prompt = (
-                clean_bold(term_match.group(1))
-                if term_match
-                else clean_bold(q_text)
-            )
-            current = {
-                'type': 'translation',
-                'categoryId': cat_id,
-                'parentTitle': cat_name,
-                'title': '名词解释',
-                'prompt': prompt,
-                'answer': '',
-                'source': '',
-            }
-
-        elif indent >= 4 and current is not None:
-            # ── Content (definition / source) ──
-            content = stripped.lstrip(' -').strip()
-            if re.match(r'核心定义[：:]', content):
-                ans = re.sub(r'^核心定义[：:]\s*', '', content)
-                current['answer'] = clean_bold(ans).strip()
-            elif re.match(r'出处[：:]', content):
-                src = re.sub(r'^出处[：:]\s*', '', content)
-                current['source'] = clean_bold(src).strip()
-
-    # ── Last question ──
-    if current and current.get('prompt') and current.get('answer'):
-        counter += 1
-        current['id'] = f"translation-{counter:03d}"
-        questions.append(current)
-
-    return questions
-
-
-def parse_choice_tf_file(lines: list[str]) -> list[dict]:
-    """Parse 选择判断.md → list of choice / true-false question dicts."""
-    questions = []
-    cat_id, cat_name = None, None
-    current = None
-    counters = {'choice': 0, 'true-false': 0}
-
-    for line in lines:
-        stripped = line.rstrip()
-        if not stripped.strip():
-            continue
-
-        indent = get_indent_level(stripped)
-
-        if indent == 0:
-            # ── Category line ──
-            cid, cname = detect_category(stripped)
-            if cid is not None:
-                if current:
-                    _finalize_ctf(current, questions, counters)
-                    current = None
-                cat_id, cat_name = cid, cname
-
-        elif indent == 2:
-            # ── Question line ──
-            if current:
-                _finalize_ctf(current, questions, counters)
-
-            q_text = re.sub(r'^  -\s*', '', stripped)
-            current = {
-                'prompt': q_text,
-                'answer': '',
-                'source': '',
-                'categoryId': cat_id,
-                'parentTitle': cat_name,
-            }
-
-        elif indent >= 4 and current is not None:
-            # ── Content (answer / source / etc.) ──
-            content = stripped.lstrip(' -').strip()
-            # Try various answer-line formats
-            ans_match = (
-                re.match(r'\*\*答案[：:]\*\*\s*(.*)', content)
-                or re.match(r'答案[：:]\s*(.*)', content)
-            )
-            if ans_match:
-                current['answer'] = ans_match.group(1)
-                # If answer text ends with **答案** and has nested content,
-                # mark that we should collect subsequent lines
-                if not current['answer'].strip():
-                    current['_ans_indent'] = indent
-            elif content == '**答案**' or content == '**答案：**':
-                # Special case: **答案** with no inline text (nested list follows)
-                current['answer'] = ''
-                current['_ans_indent'] = indent
-            elif current.get('_ans_indent') is not None and indent > current['_ans_indent']:
-                # Collect nested answer content
-                raw_text = re.sub(r'^- ', '', stripped.strip(), count=1)
-                clean_text = clean_bold(raw_text).strip()
-                if current['answer']:
-                    current['answer'] += '\n' + clean_text
-                else:
-                    current['answer'] = clean_text
-            elif re.match(r'出处[：:]\s*', content):
-                src = re.sub(r'^出处[：:]\s*', '', content)
-                current['source'] = clean_bold(src).strip()
-            elif re.match(r'要点', content):
-                # Reached next section, stop collecting answer
-                current.pop('_ans_indent', None)
-
-    # ── Last question ──
-    if current:
-        _finalize_ctf(current, questions, counters)
-
-    return questions
-
-
-def _finalize_ctf(q_data: dict, questions: list, counters: dict):
-    """Classify a pending choice/tf question and append it to *questions*."""
-    prompt = q_data.get('prompt', '')
-    answer = q_data.get('answer', '')
-    source = q_data.get('source', '')
-
-    if _is_tf(prompt, answer):
-        clean_ans = clean_bold(answer).strip()
-        tf_value = (
-            clean_ans.startswith('正确')
-            or clean_ans.startswith('对')
-            or clean_ans.startswith('true')
-        )
-        counters['true-false'] += 1
-        questions.append({
-            'id': f"true-false-{counters['true-false']:03d}",
-            'type': 'true-false',
-            'categoryId': q_data['categoryId'],
-            'parentTitle': q_data['parentTitle'],
-            'title': '判断题',
-            'prompt': clean_prompt(prompt),
-            'answer': tf_value,
-            'source': source,
-        })
-    else:
-        options, correct = _extract_choice_options(prompt, answer)
-        counters['choice'] += 1
-        q = {
-            'id': f"choice-{counters['choice']:03d}",
-            'type': 'choice',
-            'categoryId': q_data['categoryId'],
-            'parentTitle': q_data['parentTitle'],
-            'title': '选择题',
-            'prompt': clean_prompt(prompt),
-            'answer': correct if correct else clean_bold(answer),
-            'source': source,
-        }
-        if options:
-            q['options'] = options
-        questions.append(q)
-
-
-def _is_tf(prompt: str, answer: str) -> bool:
-    """Determine whether a question should be classified as true-false."""
-    if '（判断' in prompt or '(判断' in prompt or '判断）' in prompt or '判断)' in prompt:
-        return True
-    clean_ans = clean_bold(answer).strip()
-    # Check prefix (answer may have extra text after the verdict)
-    return any(clean_ans.startswith(v) for v in ('正确', '错误', '对', '错', 'true', 'false'))
-
-
-def _extract_choice_options(prompt: str, answer: str):
-    """Extract options and determine correct answer letter(s) for a choice question.
-
-    Returns (options_list, correct_letter_str).
-    """
-    options = []
-
-    # ── Find options from parentheses containing '/' separators ──
-    # Look for （...）or (...) groups with slashes
-    paren_groups = re.findall(r'[（(]([^）)]+?)[）)]', prompt)
-    for group in reversed(paren_groups):
-        if '/' in group:
-            parts = [
-                clean_bold(p.strip())
-                for p in group.split('/')
-                if p.strip()
-            ]
-            if len(parts) >= 2:
-                options = parts
-                break
-
-    if not options:
-        return [], None
-
-    labeled = [f"{chr(ord('A')+i)}. {o}" for i, o in enumerate(options)]
-    clean_ans = clean_bold(answer).strip()
-
-    # ── Case 1: answer is a bare letter ──
-    letter_m = re.match(r'^\s*([A-D])\s*$', clean_ans)
-    if letter_m:
-        return labeled, letter_m.group(1)
-
-    # ── Case 2: try to match options against the first "sentence" of answer ──
-    first_part = re.split(r'[（(]', clean_ans, maxsplit=1)[0]
-    first_part = re.split(r'[；;]', first_part, maxsplit=1)[0]
-
-    correct_idx = []
-    for i, opt in enumerate(options):
-        if opt in first_part:
-            correct_idx.append(i)
-
-    # Fallback: check full text
-    if not correct_idx:
-        for i, opt in enumerate(options):
-            if opt == clean_ans or clean_ans in opt or opt in clean_ans:
-                correct_idx.append(i)
-
-    if correct_idx:
-        correct = '、'.join(chr(ord('A') + i) for i in sorted(set(correct_idx)))
-        return labeled, correct
-
-    # No match found – return options but no letter-answer
-    return labeled, None
-
-
-def parse_essay_file(lines: list[str]) -> list[dict]:
-    """Parse 简答论述.md → list of essay-type question dicts."""
-    questions = []
-    cat_id, cat_name = None, None
-    current = None
-    answer_buffer: list[str] = []
-    counter = 0
-
-    def flush_current():
-        """Save the pending question if valid."""
-        nonlocal current, counter
-        if current is None:
-            return
-        answer_text = '\n'.join(answer_buffer).strip()
-        if not answer_text:
-            return
-        src_match = re.search(r'出处[：:]\s*([^\n]+)', answer_text)
-        source = (
-            clean_bold(src_match.group(1)).strip()
-            if src_match
-            else ''
-        )
-        counter += 1
-        questions.append({
-            'id': f"essay-{counter:03d}",
-            'type': 'essay',
-            'categoryId': current['categoryId'],
-            'parentTitle': current['parentTitle'],
-            'title': '简答论述',
-            'prompt': current['prompt'],
-            'answer': clean_bold(answer_text),
-            'source': source,
-        })
-        current = None
-        answer_buffer.clear()
-
-    for line in lines:
-        stripped = line.rstrip()
-        if not stripped.strip():
-            continue
-
-        # ── Top-level list item (category or question) ──
-        if re.match(r'^- ', stripped):
-            if _is_essay_category(stripped):
-                # ── Category ──
-                flush_current()
-                cid, cname = detect_category(stripped)
-                if cid is not None:
-                    cat_id, cat_name = cid, cname
-            else:
-                # ── Question ──
-                flush_current()
-                prompt_text = re.sub(r'^- ', '', stripped)
-                prompt_text = clean_bold(prompt_text).strip()
-                prompt_text = strip_trailing_count(prompt_text)
-                current = {
-                    'categoryId': cat_id,
-                    'parentTitle': cat_name,
-                    'prompt': prompt_text,
-                }
-        elif current is not None:
-            # ── Answer content ──
-            answer_buffer.append(stripped)
-
-    # ── Last question ──
-    flush_current()
-
-    return questions
-
-
-def _is_essay_category(line: str) -> bool:
-    """Determine if a top-level ``- `` line in 简答论述.md is a category header."""
-    clean = re.sub(r'\*\*', '', line)
-    clean = re.sub(r'^-\s*', '', clean).strip()
-
-    # Exact match against known category texts
-    if clean in KNOWN_CATEGORY_TEXTS:
-        return True
-
-    # Short lines (<= 15 chars) containing a category keyword
-    if len(clean) <= 15:
-        for kw, _, _ in CATEGORY_PATTERNS:
-            if re.search(kw, clean):
-                return True
-
-    return False
-
-
-# ─── Main ────────────────────────────────────────────────────────────────────
+def guess_opts(prompt):
+    """Generate 4 options for a choice question."""
+    for g in reversed(re.findall(r'[（(]([^）)]+?)[）)]', prompt)):
+        parts = [clean(p) for p in g.split('/') if p.strip()]
+        if len(parts) >= 2:
+            return [{'key': chr(65+i), 'text': p} for i, p in enumerate(parts)]
+    cp = re.sub(r'\*\*', '', prompt)
+    cp = re.sub(r'[（(]\d+次[）)]', '', cp)
+    for kw, opts in sorted(OPTS.items(), key=lambda x: -len(x[0])):
+        if kw in cp:
+            return [{'key': chr(65+i), 'text': t} for i, t in enumerate(opts)]
+    return [{'key': 'A', 'text': '是'}, {'key': 'B', 'text': '否'},
+            {'key': 'C', 'text': '不一定'}, {'key': 'D', 'text': '以上都不对'}]
+
+def ans_key(prompt, opts, ans_text):
+    """Determine correct answer key letter."""
+    for g in reversed(re.findall(r'[（(]([^）)]+?)[）)]', prompt)):
+        parts = [clean(p) for p in g.split('/') if p.strip()]
+        if len(parts) == len(opts) and len(parts) >= 2:
+            for io, p in enumerate(parts):
+                if p in ans_text: return chr(65+io)
+            return 'A'
+    for io, opt in enumerate(opts):
+        if len(opt['text']) > 2 and opt['text'] in ans_text:
+            return chr(65+io)
+    return 'A'
+
+def parse_noun(fp):
+    qs, idx, i = [], 0, 0
+    lines = open(fp, encoding='utf-8').readlines()
+    while i < len(lines):
+        m = re.match(r'^  - \*\*(.+?)\*\*', lines[i])
+        if not m: i += 1; continue
+        prompt = re.sub(r'[（(]\d+次[）)]', '', clean(m.group(1)))
+        i += 1; buf = []
+        while i < len(lines) and not re.match(r'^  - \*\*', lines[i]):
+            if lines[i].strip(): buf.append(clean(lines[i]))
+            i += 1
+        idx += 1
+        qs.append({'id': f"translation-{idx:03d}", 'type': 'translation',
+            'categoryId': 'translation', 'categoryTitle': '名词解释', 'number': idx,
+            'prompt': prompt, 'referenceAnswer': ' '.join(buf)})
+    return qs
+
+def parse_ctf(fp):
+    choices, tfs, ic, it = [], [], 0, 0
+    lines = open(fp, encoding='utf-8').readlines(); i = 0
+    while i < len(lines):
+        m = re.match(r'^  - (.+)', lines[i])
+        if not m or '**答案' in lines[i]: i += 1; continue
+        qtext = m.group(1).strip()
+        if qtext in ['要点', '要点：'] or qtext.startswith('要点：'): i += 1; continue
+        i += 1; ans_text = ''
+        while i < len(lines):
+            n = lines[i].rstrip()
+            if n.startswith('  - ') and not n.startswith('    - '): break
+            if n.strip() and '出处' not in n: ans_text += ' ' + clean(n)
+            i += 1
+        ans_text = ans_text.strip()
+        if '判断' in qtext:
+            it += 1
+            tfs.append({'id': f"true-false-{it:03d}", 'type': 'true-false',
+                'categoryId': 'true-false', 'categoryTitle': '判断题', 'number': it,
+                'prompt': qtext, 'answerIsTrue': ans_text.startswith('正确')})
+        else:
+            opts = guess_opts(qtext)
+            correct = ans_key(qtext, opts, ans_text)
+            ic += 1
+            choices.append({'id': f"choice-{ic:03d}", 'type': 'choice',
+                'categoryId': 'choice', 'categoryTitle': '选择题', 'number': ic,
+                'prompt': qtext, 'options': opts, 'answerKey': correct, 'explanation': ans_text})
+    return choices, tfs
+
+def parse_essay(fp):
+    qs, idx, i = [], 0, 0
+    skips = ['脊索动物', '鱼纲', '两栖纲', '爬行纲', '鸟纲', '哺乳纲', '比较解剖']
+    lines = open(fp, encoding='utf-8').readlines()
+    while i < len(lines):
+        m = re.match(r'^- (.+)', lines[i])
+        if not m: i += 1; continue
+        t = clean(m.group(1))
+        if any(kw in t for kw in skips) and len(t) < 15: i += 1; continue
+        qtext = m.group(1).strip()
+        if not qtext: i += 1; continue
+        i += 1; buf = []
+        while i < len(lines):
+            n = lines[i].rstrip()
+            if re.match(r'^- ', n) and not n.startswith('  '): break
+            if n.strip(): buf.append(clean(n))
+            i += 1
+        idx += 1
+        qs.append({'id': f"essay-{idx:03d}", 'type': 'essay',
+            'categoryId': 'essay', 'categoryTitle': '简答论述', 'number': idx,
+            'prompt': qtext, 'referenceAnswer': ' '.join(buf)})
+    return qs
 
 def main():
-    OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
-
-    all_questions: list[dict] = []
-
-    # 1. 名词解释.md
-    print("Parsing 名词解释.md ...")
-    lines = read_lines(DOCX_DIR / '名词解释.md')
-    qs = parse_noun_file(lines)
-    all_questions.extend(qs)
-    print(f"  → {len(qs)} translation questions")
-
-    # 2. 选择判断.md
-    print("Parsing 选择判断.md ...")
-    lines = read_lines(DOCX_DIR / '选择判断.md')
-    qs = parse_choice_tf_file(lines)
-    n_choice = sum(1 for q in qs if q['type'] == 'choice')
-    n_tf = sum(1 for q in qs if q['type'] == 'true-false')
-    all_questions.extend(qs)
-    print(f"  → {n_choice} choice + {n_tf} true-false = {len(qs)} total")
-
-    # 3. 简答论述.md
-    print("Parsing 简答论述.md ...")
-    lines = read_lines(DOCX_DIR / '简答论述.md')
-    qs = parse_essay_file(lines)
-    all_questions.extend(qs)
-    print(f"  → {len(qs)} essay questions")
-
-    # ── Aggregate category counts ──
-    cat_counts = {c['id']: 0 for c in CATEGORIES}
-    for q in all_questions:
-        cid = q.get('categoryId')
-        if cid is not None and cid in cat_counts:
-            cat_counts[cid] += 1
-
-    # ── Build output ──
-    output = {
-        'generatedAt': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.000Z'),
-        'totalQuestions': len(all_questions),
-        'categories': [
-            {'id': c['id'], 'name': c['name'], 'questionCount': cat_counts[c['id']]}
-            for c in CATEGORIES
-        ],
-        'questions': all_questions,
-    }
-
-    with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
-        json.dump(output, f, ensure_ascii=False, indent=2)
-
-    # ── Print summary ──
-    stats = {
-        'translation': sum(1 for q in all_questions if q['type'] == 'translation'),
-        'choice': sum(1 for q in all_questions if q['type'] == 'choice'),
-        'true-false': sum(1 for q in all_questions if q['type'] == 'true-false'),
-        'essay': sum(1 for q in all_questions if q['type'] == 'essay'),
-    }
-    print()
-    print("=" * 48)
-    print(f"  Total questions : {len(all_questions)}")
-    print(f"  translation     : {stats['translation']}")
-    print(f"  choice          : {stats['choice']}")
-    print(f"  true-false      : {stats['true-false']}")
-    print(f"  essay           : {stats['essay']}")
-    print("─" * 48)
-    print(f"  Output          : {OUTPUT_FILE}")
-    print("=" * 48)
-
+    t = parse_noun(SRC / '名词解释.md')
+    c, f = parse_ctf(SRC / '选择判断.md')
+    e = parse_essay(SRC / '简答论述.md')
+    all_q = t + c + f + e
+    type_names = {'translation':'名词解释','choice':'选择题','true-false':'判断题','essay':'简答论述'}
+    cats = [{'id': tid, 'type': tid, 'title': type_names[tid],
+             'questionCount': sum(1 for q in all_q if q['categoryId'] == tid)}
+            for tid in ['translation','choice','true-false','essay']]
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    with open(OUT, 'w', encoding='utf-8') as f:
+        json.dump({
+            'generatedAt': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.000Z'),
+            'totalQuestions': len(all_q), 'categories': cats, 'questions': all_q
+        }, f, ensure_ascii=False, indent=2)
+    bad = sum(1 for q in all_q if q['type']=='choice' and len(q.get('options',[]))==4 and q['options'][0]['text']=='是')
+    no_opts = [q for q in all_q if q['type']=='choice' and not q.get('options')]
+    nc = sum(1 for q in all_q if q['type']=='choice')
+    nf = sum(1 for q in all_q if q['type']=='true-false')
+    print(f"Total: {len(all_q)} | Choice: {nc} | TF: {nf} | Generic: {bad} | NoOpts: {len(no_opts)}")
+    for q in no_opts:
+        print(f"  MISSING OPTS: {q['id']} {q['prompt'][:50]}")
 
 if __name__ == '__main__':
     main()
